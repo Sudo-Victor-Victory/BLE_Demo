@@ -1,16 +1,21 @@
 # ble_test
 
-A new Flutter project.
+Both a showcase and documentation of utilizing [flutter blue plus](https://pub.dev/packages/flutter_blue_plus) and [permission handler](https://pub.dev/packages/permission_handler) to create a mobile app that acts as BLE client. I found that the documentation in utilizing both libraries was limited so this is my attempt to fill that gap.
 
 ## Getting Started
 
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Due to having imported all of my files - you can simply download the git repository, run, then scan & connect to nearby BLE devices at your leisure. Its also a great learning resource. 
+However, here are some **GOTCHAS** that this and many other BLE apps will encounter
+- You **Cannot** run this project with an emulator. Most Android and iOS emulators:
+  - Do not support Bluetooth hardware passthrough.
+  - Cannot scan for or connect to BLE devices.
+  - Lack the necessary Bluetooth stack/hardware simulation.
+- Verify and modify permissions on your tech stack (Android versions 12+ will run out of the box)
+  - Android frequently changes required permissions for technology like BLE. This code is acceptable for android ver 12+.
+  - For other versions, you will have to google and change various things such as
+    - Required permissions in AndroidManifest.xml (/android/app/src/main/AndroidManifest.xml)
+    - Library versions of Flutter_Blue_Plus and Permission_Handler
+    - Various small changes in build.gradle.kts for compatability
+- No IOS compatability as of right now
+  - I don't have an iphone and therefore can't test the functionality.
+  - Similarly, Android and IOS' permissions are handled differently, but the logic behind the two remains similar.
