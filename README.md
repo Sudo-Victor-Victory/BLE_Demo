@@ -19,3 +19,7 @@ However, here are some **GOTCHAS** that this and many other BLE apps will encoun
 - No IOS compatability as of right now
   - I don't have an iphone and therefore can't test the functionality.
   - Similarly, Android and IOS' permissions are handled differently, but the logic behind the two remains similar.
+
+Here is a video showing off what this code can do. The ESP32 code is not included only the client is (Flutter / mobile app)
+https://github.com/user-attachments/assets/1ae3cd78-b3a0-4ed9-ad5b-b1d2520386f5
+
