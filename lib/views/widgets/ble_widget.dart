@@ -133,7 +133,6 @@ class _BleScannerState extends State<BleScanner> {
         List<int> value = await targetCharacteristic.read();
         print("Read value: $value");
 
-        // 🧠 Convert value to string if applicable
         decodedValue = String.fromCharCodes(value);
       }
       decodedValue = decodedValue ?? "No data found";
