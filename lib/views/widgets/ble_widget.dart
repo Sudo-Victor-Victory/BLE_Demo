@@ -25,8 +25,8 @@ class _BleScannerState extends State<BleScanner> {
   // Variables used in accessing a characteristic from the BLE perihperal
   String serviceUuid = "b64cfb1e-045c-4975-89d6-65949bcb35aa";
   String characteristicUuid = "33737322-fb5c-4a6f-a4d9-e41c1b20c30d";
-  String? decodedValue;
-
+  Map<List<int>, int>? decodedValue;
+  String returnedECGData = "";
   @override
   void initState() {
     super.initState();
@@ -133,9 +133,13 @@ class _BleScannerState extends State<BleScanner> {
         List<int> value = await targetCharacteristic.read();
         print("Read value: $value");
 
-        decodedValue = String.fromCharCodes(value);
+        decodedValue = decodeEcgData(value);
       }
-      decodedValue = decodedValue ?? "No data found";
+      if (decodedValue == null) {
+        returnedECGData = "No data found";
+      } else {
+        returnedECGData = decodedValue.toString();
+      }
       showDialog(
         context: context,
         builder: (_) => AlertDialog(
@@ -146,7 +150,7 @@ class _BleScannerState extends State<BleScanner> {
             child: Column(
               children: [
                 Text('Successfully connected to $name'),
-                Center(child: Text(decodedValue!)),
+                Center(child: Text(returnedECGData)),
               ],
             ),
           ),
@@ -242,4 +246,28 @@ class _BleScannerState extends State<BleScanner> {
             ),
     );
   }
+}
+
+Map<List<int>, int>? decodeEcgData(List<int> value) {
+  if (value.length != 24) {
+    print("Unexpected packet size: ${value.length}");
+    return null;
+  }
+
+  final bytes = Uint8List.fromList(value);
+  final byteData = ByteData.sublistView(bytes);
+
+  // 10 samples
+  List<int> samples = [];
+  for (int i = 0; i < 10; i++) {
+    int sample = byteData.getUint16(i * 2, Endian.little);
+    samples.add(sample);
+  }
+
+  // Timestamp is at byte 20
+  int timestamp = byteData.getUint32(20, Endian.little);
+  Map<List<int>, int> data = {samples: timestamp};
+  print("Samples: $samples");
+  print("Timestamp: $timestamp");
+  return data;
 }
