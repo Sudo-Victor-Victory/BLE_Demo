@@ -35,7 +35,7 @@ class _BleScannerState extends State<BleScanner> {
 
   double latestEcgTime = 0;
   late ZoomPanBehavior _zoomPanBehavior;
-  static const double fixedWindowSize = 1600.0;
+  static const double fixedWindowSize = 2000.0;
 
   late ChartSeriesController _chartSeriesController;
   @override
@@ -237,6 +237,7 @@ class _BleScannerState extends State<BleScanner> {
                         // Absolutely necessary for real-time charting
                         onRendererCreated: (controller) =>
                             _chartSeriesController = controller,
+                        color: const Color.fromARGB(255, 228, 10, 10),
                       ),
                     ],
                     zoomPanBehavior: _zoomPanBehavior,
