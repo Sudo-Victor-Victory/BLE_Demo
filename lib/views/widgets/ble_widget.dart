@@ -26,13 +26,16 @@ class _BleScannerState extends State<BleScanner> {
   final String serviceUuid = "b64cfb1e-045c-4975-89d6-65949bcb35aa";
   final String characteristicUuid = "33737322-fb5c-4a6f-a4d9-e41c1b20c30d";
 
-  List<EcgDataPoint> ecgSpots = [];
+  // List of data points that is being charted
+  List<EcgDataPoint> ecgDataPoints = [];
   BluetoothDevice? _connectedDevice;
 
+  // Used to have change timestamps to be relative instead of esp32's absolute.
   int? startTimestampMs;
-  double runningX = 0;
+
+  double latestEcgTime = 0;
   late ZoomPanBehavior _zoomPanBehavior;
-  static const double fixedWindowSize = 3500.0;
+  static const double fixedWindowSize = 1600.0;
 
   late ChartSeriesController _chartSeriesController;
   @override
@@ -142,7 +145,8 @@ class _BleScannerState extends State<BleScanner> {
           }
         }
       }
-
+      // Converts the received bytes from the ble notification
+      // and sends it to be processed by handleNotificaiton
       if (targetCharacteristic != null) {
         await targetCharacteristic.setNotifyValue(true);
         targetCharacteristic.onValueReceived.listen(
@@ -178,15 +182,15 @@ class _BleScannerState extends State<BleScanner> {
   }
 
   void _resetData() {
-    ecgSpots.clear();
+    ecgDataPoints.clear();
     startTimestampMs = null;
-    runningX = 0;
+    latestEcgTime = 0;
   }
 
   @override
   Widget build(BuildContext context) {
-    // Define the visible window using absolute time on X axis:
-    double maxX = runningX;
+    // Define the visible window using absolute time on ecgTime axis:
+    double maxX = latestEcgTime;
     double minX = maxX - fixedWindowSize;
     if (minX < 0) minX = 0;
 
@@ -207,7 +211,7 @@ class _BleScannerState extends State<BleScanner> {
                   ))
           : Column(
               children: [
-                const Text("Connected to ECG device apple"),
+                const Text("Connected to ECG device"),
                 Expanded(
                   child: SfCartesianChart(
                     backgroundColor: Colors.black,
@@ -215,7 +219,8 @@ class _BleScannerState extends State<BleScanner> {
                     primaryXAxis: NumericAxis(
                       minimum: minX,
                       maximum: maxX,
-                      interval: 500, // optional, makes ticks every 500ms
+                      interval:
+                          500, // Adds a tick mark every 500ms for clarity.
                       edgeLabelPlacement: EdgeLabelPlacement.shift,
                     ),
                     primaryYAxis: NumericAxis(
@@ -225,10 +230,11 @@ class _BleScannerState extends State<BleScanner> {
                     ),
                     series: [
                       LineSeries<EcgDataPoint, double>(
-                        dataSource: ecgSpots,
-                        xValueMapper: (EcgDataPoint dp, _) => dp.x,
-                        yValueMapper: (EcgDataPoint dp, _) => dp.y,
+                        dataSource: ecgDataPoints,
+                        xValueMapper: (EcgDataPoint dp, _) => dp.ecgTime,
+                        yValueMapper: (EcgDataPoint dp, _) => dp.ecgValue,
                         animationDuration: 0,
+                        // Absolutely necessary for real-time charting
                         onRendererCreated: (controller) =>
                             _chartSeriesController = controller,
                       ),
@@ -241,7 +247,7 @@ class _BleScannerState extends State<BleScanner> {
     );
   }
 
-  // Creates visual and ontap for a BLE scan result
+  // Creates visual and ontap for a BLE scan result, and houses Ecg charter
   Widget _buildDeviceTile(ScanResult result) {
     final bluetoothDevice = result.device;
     final bluetoothDeviceName = bluetoothDevice.platformName.isNotEmpty
@@ -284,44 +290,52 @@ class _BleScannerState extends State<BleScanner> {
     );
   }
 
+  // Ensures a valid Ecg packet was sent, and sends the data to be included in
+  // the chart.
   void handleNotification(List<int> value) {
     final packet = decodeEcgData(value);
-    if (packet == null) return;
+    if (packet == null) {
+      return;
+    }
 
     startTimestampMs ??= packet.timestamp;
 
-    _updateDataSource(packet);
+    _updateChart(packet);
   }
 
-  /// Continuously updating the data source based on timer.
-  void _updateDataSource(EcgPacket packet) {
+  /// Continuously update the chart's controller based on the ECG packet
+  void _updateChart(EcgPacket packet) {
     for (int i = 0; i < packet.samples.length; i++) {
-      double x =
+      // Calculates time for each ecg value from the timestamp.
+      // Timestamp is collected at 1st batch value, every one follows by 4ms.
+      double ecgTime =
           (packet.timestamp - (startTimestampMs ?? packet.timestamp))
               .toDouble() +
           i * 4;
-      double y = packet.samples[i].toDouble();
+      double ecgValue = packet.samples[i].toDouble();
 
-      ecgSpots.add(EcgDataPoint(x, y));
+      ecgDataPoints.add(EcgDataPoint(ecgTime, ecgValue));
+      // Update `latestEcgTime` to reflect most recent ecgTime value
+      latestEcgTime = ecgTime;
 
-      // Update `runningX` to reflect most recent x value
-      runningX = x;
-
+      // Adds current ECG packet to the chart
       _chartSeriesController.updateDataSource(
-        addedDataIndexes: [ecgSpots.length - 1],
+        addedDataIndexes: [ecgDataPoints.length - 1],
       );
     }
 
-    // Remove old data
-    double cutoff = ecgSpots.last.x - fixedWindowSize;
+    // Defines the left-most data to be removed from the chart
+    double cutoff = ecgDataPoints.last.ecgTime - fixedWindowSize;
     int removedCount = 0;
 
-    while (ecgSpots.isNotEmpty && ecgSpots.first.x < cutoff) {
-      ecgSpots.removeAt(0);
+    // Removes the data from ecgDataPoints and keeps a count of removed items
+    while (ecgDataPoints.isNotEmpty && ecgDataPoints.first.ecgTime < cutoff) {
+      ecgDataPoints.removeAt(0);
       removedCount++;
     }
 
     if (removedCount > 0) {
+      // Removes indexes of 0 to removedCount-1 from the chart.
       _chartSeriesController.updateDataSource(
         removedDataIndexes: List.generate(removedCount, (index) => index),
       );
@@ -338,13 +352,9 @@ class EcgPacket {
 }
 
 class EcgDataPoint {
-  final double x;
-  final double y;
-  EcgDataPoint(this.x, this.y);
-
-  double getX() {
-    return x;
-  }
+  final double ecgTime;
+  final double ecgValue;
+  EcgDataPoint(this.ecgTime, this.ecgValue);
 }
 
 EcgPacket? decodeEcgData(List<int> value) {
