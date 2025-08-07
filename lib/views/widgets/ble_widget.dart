@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:syncfusion_flutter_charts/charts.dart';
 
 class BleScanner extends StatefulWidget {
   const BleScanner({super.key});
@@ -22,17 +23,25 @@ class _BleScannerState extends State<BleScanner> {
   // Bluetooth devices. Will be initialized on retrival of BLE devices.
   late final StreamSubscription<List<ScanResult>> _scanSubscription;
 
-  // Variables used in accessing a characteristic from the BLE perihperal
-  String serviceUuid = "b64cfb1e-045c-4975-89d6-65949bcb35aa";
-  String characteristicUuid = "33737322-fb5c-4a6f-a4d9-e41c1b20c30d";
-  Map<List<int>, int>? decodedValue;
-  String returnedECGData = "";
+  final String serviceUuid = "b64cfb1e-045c-4975-89d6-65949bcb35aa";
+  final String characteristicUuid = "33737322-fb5c-4a6f-a4d9-e41c1b20c30d";
+
+  List<EcgDataPoint> ecgSpots = [];
+  BluetoothDevice? _connectedDevice;
+
+  int? startTimestampMs;
+  double runningX = 0;
+  late ZoomPanBehavior _zoomPanBehavior;
+  static const double fixedWindowSize = 3500.0;
+
+  late ChartSeriesController _chartSeriesController;
   @override
   void initState() {
     super.initState();
     // Calls initBLE after Widget Tree has finished being built.
     // Without it, the BLE util will be inaccessible & cause errors.
     WidgetsBinding.instance.addPostFrameCallback((_) => _initBle());
+    _zoomPanBehavior = ZoomPanBehavior(enablePanning: true);
   }
 
   Future<void> _initBle() async {
@@ -110,12 +119,16 @@ class _BleScannerState extends State<BleScanner> {
       print('Connecting to ${device.remoteId}');
       await device.connect(timeout: const Duration(seconds: 10));
       print('Connected to ${device.remoteId}');
-
+      setState(() {
+        _connectedDevice = device;
+        _resetData();
+      });
       // Ensures that user is still on the same page after waiting to
       // connect to the bluetooth device
       if (!mounted) {
         return;
       }
+
       List<BluetoothService> services = await device.discoverServices();
       BluetoothCharacteristic? targetCharacteristic;
 
@@ -129,17 +142,14 @@ class _BleScannerState extends State<BleScanner> {
           }
         }
       }
-      if (targetCharacteristic != null) {
-        List<int> value = await targetCharacteristic.read();
-        print("Read value: $value");
 
-        decodedValue = decodeEcgData(value);
+      if (targetCharacteristic != null) {
+        await targetCharacteristic.setNotifyValue(true);
+        targetCharacteristic.onValueReceived.listen(
+          (value) => handleNotification(Uint8List.fromList(value)),
+        );
       }
-      if (decodedValue == null) {
-        returnedECGData = "No data found";
-      } else {
-        returnedECGData = decodedValue.toString();
-      }
+
       showDialog(
         context: context,
         builder: (_) => AlertDialog(
@@ -147,12 +157,7 @@ class _BleScannerState extends State<BleScanner> {
           content: SizedBox(
             width: 200.0,
             height: 100.0,
-            child: Column(
-              children: [
-                Text('Successfully connected to $name'),
-                Center(child: Text(returnedECGData)),
-              ],
-            ),
+            child: Column(children: [Text('Successfully connected to $name')]),
           ),
           actions: [
             TextButton(
@@ -170,6 +175,70 @@ class _BleScannerState extends State<BleScanner> {
         ).showSnackBar(SnackBar(content: Text('Failed to connect to $name')));
       }
     }
+  }
+
+  void _resetData() {
+    ecgSpots.clear();
+    startTimestampMs = null;
+    runningX = 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Define the visible window using absolute time on X axis:
+    double maxX = runningX;
+    double minX = maxX - fixedWindowSize;
+    if (minX < 0) minX = 0;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("BLE Scanner"),
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _startScan),
+        ],
+      ),
+      body: _connectedDevice == null
+          ? (_bluetoothDevices.isEmpty
+                ? const Center(child: Text("No devices found."))
+                : ListView.builder(
+                    itemCount: _bluetoothDevices.length,
+                    itemBuilder: (_, index) =>
+                        _buildDeviceTile(_bluetoothDevices[index]),
+                  ))
+          : Column(
+              children: [
+                const Text("Connected to ECG device apple"),
+                Expanded(
+                  child: SfCartesianChart(
+                    backgroundColor: Colors.black,
+                    plotAreaBorderWidth: 0,
+                    primaryXAxis: NumericAxis(
+                      minimum: minX,
+                      maximum: maxX,
+                      interval: 500, // optional, makes ticks every 500ms
+                      edgeLabelPlacement: EdgeLabelPlacement.shift,
+                    ),
+                    primaryYAxis: NumericAxis(
+                      minimum: 0,
+                      maximum: 4096,
+                      interval: 512,
+                    ),
+                    series: [
+                      LineSeries<EcgDataPoint, double>(
+                        dataSource: ecgSpots,
+                        xValueMapper: (EcgDataPoint dp, _) => dp.x,
+                        yValueMapper: (EcgDataPoint dp, _) => dp.y,
+                        animationDuration: 0,
+                        onRendererCreated: (controller) =>
+                            _chartSeriesController = controller,
+                      ),
+                    ],
+                    zoomPanBehavior: _zoomPanBehavior,
+                  ),
+                ),
+              ],
+            ),
+    );
   }
 
   // Creates visual and ontap for a BLE scan result
@@ -193,13 +262,17 @@ class _BleScannerState extends State<BleScanner> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildText(bluetoothDeviceName, 16, FontWeight.bold),
+                  Text(
+                    bluetoothDeviceName,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                   const SizedBox(height: 4),
-                  _buildText(
+                  Text(
                     bluetoothDevice.remoteId.toString(),
-                    14,
-                    FontWeight.normal,
-                    color: Colors.grey,
+                    style: const TextStyle(fontSize: 14, color: Colors.grey),
                   ),
                 ],
               ),
@@ -211,44 +284,70 @@ class _BleScannerState extends State<BleScanner> {
     );
   }
 
-  // Extracted method to build Text widget
-  Text _buildText(
-    String text,
-    double fontSize,
-    FontWeight fontWeight, {
-    Color color = Colors.black,
-  }) {
-    return Text(
-      text,
-      style: TextStyle(
-        fontSize: fontSize,
-        fontWeight: fontWeight,
-        color: color,
-      ),
-    );
+  void handleNotification(List<int> value) {
+    final packet = decodeEcgData(value);
+    if (packet == null) return;
+
+    startTimestampMs ??= packet.timestamp;
+
+    _updateDataSource(packet);
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("BLE Scanner"),
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _startScan),
-        ],
-      ),
-      body: _bluetoothDevices.isEmpty
-          ? const Center(child: Text("No devices found."))
-          : ListView.builder(
-              itemCount: _bluetoothDevices.length,
-              itemBuilder: (_, device) =>
-                  _buildDeviceTile(_bluetoothDevices[device]),
-            ),
-    );
+  /// Continuously updating the data source based on timer.
+  void _updateDataSource(EcgPacket packet) {
+    for (int i = 0; i < packet.samples.length; i++) {
+      double x =
+          (packet.timestamp - (startTimestampMs ?? packet.timestamp))
+              .toDouble() +
+          i * 4;
+      double y = packet.samples[i].toDouble();
+
+      ecgSpots.add(EcgDataPoint(x, y));
+
+      // Update `runningX` to reflect most recent x value
+      runningX = x;
+
+      _chartSeriesController.updateDataSource(
+        addedDataIndexes: [ecgSpots.length - 1],
+      );
+    }
+
+    // Remove old data
+    double cutoff = ecgSpots.last.x - fixedWindowSize;
+    int removedCount = 0;
+
+    while (ecgSpots.isNotEmpty && ecgSpots.first.x < cutoff) {
+      ecgSpots.removeAt(0);
+      removedCount++;
+    }
+
+    if (removedCount > 0) {
+      _chartSeriesController.updateDataSource(
+        removedDataIndexes: List.generate(removedCount, (index) => index),
+      );
+    }
+
+    setState(() {});
   }
 }
 
-Map<List<int>, int>? decodeEcgData(List<int> value) {
+class EcgPacket {
+  final List<int> samples;
+  final int timestamp;
+  EcgPacket(this.samples, this.timestamp);
+}
+
+class EcgDataPoint {
+  final double x;
+  final double y;
+  EcgDataPoint(this.x, this.y);
+
+  double getX() {
+    return x;
+  }
+}
+
+EcgPacket? decodeEcgData(List<int> value) {
   if (value.length != 24) {
     print("Unexpected packet size: ${value.length}");
     return null;
@@ -263,11 +362,7 @@ Map<List<int>, int>? decodeEcgData(List<int> value) {
     int sample = byteData.getUint16(i * 2, Endian.little);
     samples.add(sample);
   }
-
   // Timestamp is at byte 20
   int timestamp = byteData.getUint32(20, Endian.little);
-  Map<List<int>, int> data = {samples: timestamp};
-  print("Samples: $samples");
-  print("Timestamp: $timestamp");
-  return data;
+  return EcgPacket(samples, timestamp);
 }
